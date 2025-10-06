@@ -1,0 +1,14 @@
+.andro10-button {
+    cursor: pointer;
+    margin: 0 10px;
+}
+
+.andro10-button:hover {
+    opacity: 0.8;
+}
+
+.player-button .andro10-button .player-button__icon {
+    background: linear-gradient(45deg, #FF416C, #FF4B2B);
+    border-radius: 50%;
+    padding: 8px;
+}
