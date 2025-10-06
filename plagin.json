@@ -1,0 +1,23 @@
+[
+    {
+        "id": "rezka",
+        "title": "Rezka",
+        "url": "https://rezka.ag",
+        "searchPath": "/search/?do=search&subaction=search&q=",
+        "active": true
+    },
+    {
+        "id": "filmix",
+        "title": "Filmix",
+        "url": "https://filmixapp.vip/api/v2/",
+        "searchPath": "/search?story=",
+        "active": true
+    },
+    {
+        "id": "kodik",
+        "title": "Kodik",
+        "url": "https://kodikapi.com/search",
+        "searchPath": "/?q=",
+        "active": true
+    }
+]
