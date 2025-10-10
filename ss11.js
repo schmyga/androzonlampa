@@ -1,0 +1,283 @@
+/*!
+ * Androzon — кнопка рядом с "Смотреть" (стиль and7ey/nb557)
+ * Балансеры: Rezka/Filmix с Lampac proxy; фиксы Tizen/Fire TV
+ * Работает на всех Lampa (yumata/mod/TV)
+ */
+
+(function () {
+  'use strict';
+
+  if (!window.Lampa) return; // Без Lampa — выход
+
+  const PLUGIN_ID = 'androzon_button';
+  const PLUGIN_TITLE = 'Androzon';
+  const DEBUG = true;
+  const LOGO_URL = 'https://yourusername.github.io/androzonlampa/logo.png'; // Замени
+
+  // Платформы (как в synology_dlna.js)
+  const isTizen = typeof tizen !== 'undefined';
+  const isAndroid = navigator.userAgent.indexOf('Android') > -1 && !isTizen;
+  const isFireTV = isAndroid && navigator.userAgent.indexOf('FireOS') > -1;
+
+  // Lampac (как в dlna.js; fallback corsproxy)
+  const LAMPA_PROXY = Lampa.Storage.get('androzon_proxy') || 'http://127.0.0.1:9118';
+  const FILMIX_TOKEN = Lampa.Storage.get('filmix_token') || '';
+
+  const BALANCERS = {
+    rezka: { name: 'Rezka', url: 'https://rezka.ag/search/?do=search&subaction=search&q=', proxy: true },
+    filmix: { name: 'Filmix', url: 'https://filmix.ac/search/', proxy: true, token: FILMIX_TOKEN }
+  };
+
+  function log(...args) { if (DEBUG) console.log('[Androzon]', ...args); }
+
+  function safeNoty(text) {
+    try { Lampa.Noty.show(text); } catch (e) { console.log('[Androzon]', text); }
+  }
+
+  // Кнопка (стиль kinopoisk_rating.js: append в buttons, цвет/лого)
+  function createButton() {
+    const button = $('<div class="full-start__button selector ' + PLUGIN_ID + '" style="background: linear-gradient(135deg, #ff7e00, #ffb700); border-radius: 50px; padding: 0 20px; margin-left: 10px; display: flex; align-items: center;">')
+      .html('<img src="' + LOGO_URL + '" style="width: 20px; height: 20px; margin-right: 5px;"> <span>Androzon</span>');
+
+    button.on('hover:enter', openAndrozon); // Touch/mouse
+
+    // Пульт (keydown как в nb557/dlna.js)
+    if (isTizen || isFireTV) {
+      button.on('keydown', function(e) {
+        if (e.code === 'Enter' || e.code === 'OK' || e.code === 'Space') {
+          e.preventDefault();
+          openAndrozon();
+        }
+      });
+    }
+
+    return button;
+  }
+
+  // Movie info (fallback селекторы как в kinopoisk.js)
+  function getMovieInfo() {
+    const title = $('.full-start-new__title, .full-start__title').text().trim();
+    const year = $('.full-start__details, .full-start__year').text().match(/\d{4}/)?.[0] || '';
+    const original = $('.full-start__original').text().trim() || title;
+    const params = new URLSearchParams(window.location.search);
+    return { title, original, year, kpId: params.get('card') || '', query: `${title} ${year}`.trim() };
+  }
+
+  // Поиск (fetch + proxy как в kinopoisk.js)
+  async function searchUniversal(id, info) {
+    const bal = BALANCERS[id];
+    safeNoty(`Поиск в ${bal.name}...`);
+    let url = `${bal.url}${encodeURIComponent(info.query)}`;
+    if (bal.proxy) url = `${LAMPA_PROXY}/proxy?url=${encodeURIComponent(url)}`;
+    else url = `https://corsproxy.io/?${encodeURIComponent(url)}`;
+
+    try {
+      const res = await fetch(url);
+      const html = await res.text();
+      const doc = new DOMParser().parseFromString(html, 'text/html');
+      const links = findLinks(doc, id);
+
+      if (links.length) showLinks(links, bal.name, info.title);
+      else safeNoty(`Не найдено в ${bal.name}`);
+    } catch (e) {
+      console.error(id, e); safeNoty(`Ошибка ${bal.name}`);
+    }
+  }
+
+  // Links (селекторы как в nb557/kp_source.js)
+  function findLinks(doc, id) {
+    const links = [];
+    const selectors = id === 'rezka' ? 'a[href*="/films/"], a[href*="/series/"]' : 'a[href*="/film/"], a[href*="/serial/"]';
+    doc.querySelectorAll(selectors).forEach(a => {
+      if (a.href && !a.href.includes('/search/') && a.textContent.trim()) {
+        links.push({ url: a.href, title: a.textContent.trim(), id });
+      }
+    });
+    return links.slice(0, 5); // Топ-5 как в synology_nas.js
+  }
+
+  // Модал ссылок (стиль rating.js: .selector, hover:focus)
+  function showLinks(links, name, title) {
+    const html = $(`
+      <div style="padding: 1em;">
+        <h3 style="color: #ff7e00;">${name} (${links.length})</h3>
+        <div class="links" style="max-height: 300px; overflow-y: auto;">
+          ${links.map(l => `<div class="selector link-item" data-url="${l.url}" data-id="${l.id}" style="background: #3a3a3a; padding: 12px; margin: 5px 0; border-radius: 8px; border: 2px solid transparent;">
+            <div style="font-weight: bold;">${l.title}</div>
+            <div style="font-size: 12px; color: #888;">${l.url}</div>
+          </div>`).join('')}
+        </div>
+      </div>
+    `);
+
+    html.find('.link-item').on('hover:enter', function() {
+      const url = $(this).data('url'), id = $(this).data('id');
+      Lampa.Modal.close();
+      parsePlay(url, id, title);
+    });
+
+    // Пульт фокус (как в head_filter.js)
+    if (isTizen || isFireTV) {
+      html.find('.link-item').on('keydown', function(e) {
+        if (e.code === 'Enter' || e.code === 'OK') {
+          const url = $(this).data('url'), id = $(this).data('id');
+          Lampa.Modal.close();
+          parsePlay(url, id, title);
+        }
+      }).on('hover:focus', function() {
+        html.find('.link-item').css('border-color', 'transparent');
+        $(this).css('border-color', '#ff7e00');
+      });
+    }
+
+    Lampa.Modal.open({
+      title: `${name} - Выбор`,
+      html: html,
+      size: 'medium',
+      buttons: [{ title: 'Назад', action: () => { Lampa.Modal.close(); setTimeout(openAndrozon, 300); } }]
+    });
+  }
+
+  // Парсинг + play (Lampa.Extract как в nb557; fallback как в kinopoisk.js)
+  async function parsePlay(url, id, title) {
+    safeNoty('Парсинг...');
+    let vUrl = null;
+    const bal = BALANCERS[id];
+
+    // Lampa.Extract (nb557-style)
+    if (Lampa.Extract) {
+      try {
+        const data = await (id === 'rezka' ? Lampa.Extract.rezka(url) : Lampa.Extract.filmix(url, { token: bal.token }));
+        if (data && data.url) vUrl = data.url;
+      } catch (e) { console.error('Extract', e); }
+    }
+
+    // Fallback proxy/DOM (and7ey-style)
+    if (!vUrl && bal.proxy) {
+      vUrl = `${LAMPA_PROXY}/proxy?url=${encodeURIComponent(url)}`;
+    } else if (!vUrl) {
+      const pUrl = `https://corsproxy.io/?${encodeURIComponent(url)}`;
+      const res = await fetch(pUrl);
+      const html = await res.text();
+      vUrl = extractUrl(html, id);
+    }
+
+    if (vUrl) playVideo(vUrl, `${bal.name} - ${title}`);
+    else safeNoty('Видео не найдено');
+  }
+
+  function extractUrl(html, id) {
+    const doc = new DOMParser().parseFromString(html, 'text/html');
+    if (id === 'rezka') {
+      const vid = doc.querySelector('video[src], source[src]');
+      if (vid) return vid.src;
+    } else if (id === 'filmix') {
+      const scr = Array.from(doc.querySelectorAll('script')).find(s => s.textContent.includes('player_data'));
+      if (scr) {
+        const m = scr.textContent.match(/player_data\s*=\s*({.*?})/);
+        if (m) try { return JSON.parse(m[1]).link; } catch (e) {}
+      }
+    }
+    const re = /(https?:\/\/[^"'>\s]*\.(m3u8|mp4)[^"']*)/i;
+    return html.match(re)?.[1] || null;
+  }
+
+  // Play (как в stats.js: Lampa.Player + events)
+  function playVideo(url, title) {
+    if (!url) return safeNoty('Неверная ссылка');
+    const data = { title, file: url, type: 'movie' };
+    if (Lampa.Player?.play) {
+      Lampa.Player.play(data);
+      // Отслеживание как в stats.js (опционально)
+      Lampa.Player.events.on('timeupdate', function(t) { log('Watch time:', t); });
+    } else {
+      Lampa.Activity.push({ url: '', component: 'player', source: data, title });
+    }
+    safeNoty('Запуск...');
+  }
+
+  // Модал балансеров (стиль rating.js: .balancer-item)
+  function openAndrozon() {
+    const info = getMovieInfo();
+    const html = $(`
+      <div style="text-align: center; padding: 1.5em;">
+        <img src="${LOGO_URL}" style="width: 60px; margin-bottom: 10px;">
+        <h2 style="color: #ff7e00;">${PLUGIN_TITLE}</h2>
+        <div style="background: #2a2a2a; padding: 10px; border-radius: 8px; margin-bottom: 15px;">
+          <div style="font-weight: bold;">${info.title}</div>
+          ${info.year ? `<div style="color: #888;">${info.year}</div>` : ''}
+        </div>
+        <h3 style="color: #fff;">Источник:</h3>
+        <div class="balancers" style="display: flex; flex-direction: column; gap: 10px;">
+          <div class="selector balancer-item" data-id="rezka" style="background: #3a3a3a; padding: 15px; border-radius: 10px; border: 2px solid transparent;">
+            <div style="font-weight: bold; color: #4CAF50;">Rezka</div>
+            <div style="font-size: 12px; color: #888;">(proxy: ${LAMPA_PROXY})</div>
+          </div>
+          <div class="selector balancer-item" data-id="filmix" style="background: #3a3a3a; padding: 15px; border-radius: 10px; border: 2px solid transparent;">
+            <div style="font-weight: bold; color: #2196F3;">Filmix</div>
+            <div style="font-size: 12px; color: #888;">(token: ${FILMIX_TOKEN ? 'OK' : 'добавь'})</div>
+          </div>
+        </div>
+      </div>
+    `);
+
+    html.find('.balancer-item').on('hover:enter', function() {
+      const id = $(this).data('id');
+      Lampa.Modal.close();
+      searchUniversal(id, info);
+    });
+
+    if (isTizen || isFireTV) {
+      html.find('.balancer-item').on('keydown', function(e) {
+        if (e.code === 'Enter' || e.code === 'OK') {
+          const id = $(this).data('id');
+          Lampa.Modal.close();
+          searchUniversal(id, info);
+        }
+      }).on('hover:focus', function() {
+        html.find('.balancer-item').css('border-color', 'transparent');
+        $(this).css('border-color', '#ff7e00');
+      });
+    }
+
+    Lampa.Modal.open({ title: PLUGIN_TITLE, html, size: 'medium', onBack: () => Lampa.Modal.close() });
+  }
+
+  // Вставка кнопки (MutationObserver как в stats.js для Tizen)
+  function insertButton() {
+    let block = $('.full-start-new__buttons, .full-start__buttons');
+    if (!block.length) block = $('.full-start');
+    if (block.length && !block.find('.' + PLUGIN_ID).length) {
+      block.append(createButton());
+      log('Кнопка добавлена');
+
+      // Observer для Tizen (динамический DOM)
+      if (isTizen) {
+        new MutationObserver((mutations) => {
+          mutations.forEach((m) => {
+            if (m.type === 'childList' && !block.find('.' + PLUGIN_ID).length) insertButton();
+          });
+        }).observe(block[0], { childList: true, subtree: true });
+      }
+    }
+  }
+
+  // Listener (full build как в kinopoisk.js)
+  Lampa.Listener.follow('full', (e) => {
+    if (e.type === 'build') {
+      setTimeout(() => {
+        insertButton();
+        if (isTizen || isFireTV) {
+          Lampa.Controller.listener.follow('keydown', (ev) => {
+            if ((ev.code === 'Enter' || ev.code === 'OK') && $('.selector.focus').hasClass(PLUGIN_ID)) {
+              ev.preventDefault();
+              openAndrozon();
+            }
+          });
+        }
+      }, isTizen ? 2000 : 1000); // Задержка для Tizen
+    }
+  });
+
+  log('Инициализация (Tizen:', isTizen, ', FireTV:', isFireTV, ')');
+})();
